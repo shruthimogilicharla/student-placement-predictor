@@ -1,92 +1,374 @@
-from pathlib import Path
-import pickle
 import pandas as pd
 import streamlit as st
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
 
-BASE = Path(__file__).resolve().parent
-MODEL = BASE/"placement_model.pkl"
-SCHEMA = BASE/"schema.pkl"
-METRICS = BASE/"metrics.csv"
-
-st.set_page_config(page_title="Student Placement Predictor", page_icon="🎓", layout="wide")
-
-if not MODEL.exists() or not SCHEMA.exists():
-    st.error("Model is not trained yet. Close this page and double-click START_PROJECT.bat.")
-    st.stop()
-
-with open(MODEL, "rb") as f: model = pickle.load(f)
-with open(SCHEMA, "rb") as f: schema = pickle.load(f)
+st.set_page_config(
+    page_title="Student Placement Predictor",
+    page_icon="🎓",
+    layout="wide"
+)
 
 st.title("🎓 Student Placement Predictor")
 st.caption("Placement Prediction & Skill Gap Analyzer")
-st.info("Educational portfolio project using a public placement dataset. The result is a model prediction, not a guarantee of placement.")
 
-cols = set(schema["columns"])
-x = {}
+DATA = "placementdata.csv"
 
-def num(label, names, default, lo, hi, step):
-    c = next((n for n in names if n in cols), None)
-    if c:
-        x[c] = st.number_input(label, min_value=lo, max_value=hi, value=default, step=step)
+try:
+    df = pd.read_csv(DATA)
+except Exception as e:
+    st.error(f"Could not load dataset: {e}")
+    st.stop()
 
-def yn(label, names):
-    c = next((n for n in names if n in cols), None)
-    if c:
-        x[c] = st.selectbox(label, ["Yes","No"])
+df.columns = [str(c).strip() for c in df.columns]
+
+target = "PlacementStatus"
+
+if target not in df.columns:
+    st.error(f"'{target}' column not found.")
+    st.write("Available columns:", list(df.columns))
+    st.stop()
+
+# Prepare target
+y = (
+    df[target]
+    .astype(str)
+    .str.strip()
+    .map({
+        "Placed": 1,
+        "NotPlaced": 0,
+        "Not Placed": 0,
+        "Yes": 1,
+        "No": 0
+    })
+)
+
+valid = y.notna()
+df = df.loc[valid].copy()
+y = y.loc[valid].astype(int)
+
+# Remove ID columns
+drop_cols = [
+    "StudentID",
+    "StudentId",
+    "student_id",
+    "sl_no",
+    "sl.no"
+]
+
+df = df.drop(
+    columns=[c for c in drop_cols if c in df.columns],
+    errors="ignore"
+)
+
+X = df.drop(columns=[target])
+
+numeric_features = X.select_dtypes(
+    include="number"
+).columns.tolist()
+
+categorical_features = [
+    c for c in X.columns
+    if c not in numeric_features
+]
+
+preprocessor = ColumnTransformer([
+    (
+        "num",
+        Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler())
+        ]),
+        numeric_features
+    ),
+    (
+        "cat",
+        Pipeline([
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore"))
+        ]),
+        categorical_features
+    )
+])
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+model = Pipeline([
+    ("preprocessor", preprocessor),
+    (
+        "classifier",
+        LogisticRegression(
+            max_iter=2000,
+            random_state=42
+        )
+    )
+])
+
+model.fit(X_train, y_train)
+
+accuracy = accuracy_score(
+    y_test,
+    model.predict(X_test)
+)
+
+st.success("✅ Machine Learning model is ready!")
+
+st.subheader("📚 Academic Profile")
 
 left, right = st.columns(2)
+
+inputs = {}
+
 with left:
-    st.subheader("📚 Academic Profile")
-    num("CGPA", ["CGPA"], 8.0, 6.0, 10.0, 0.1)
-    num("Aptitude Test Score", ["AptitudeTestScore","ApptitudeTestScore"], 75, 0, 100, 1)
-    num("SSC Marks", ["SSC_Marks","SSC"], 75, 0, 100, 1)
-    num("HSC Marks", ["HSC_Marks","HSC"], 75, 0, 100, 1)
+    st.write("### Academic Details")
+
+    if "CGPA" in X.columns:
+        inputs["CGPA"] = st.number_input(
+            "CGPA",
+            min_value=0.0,
+            max_value=10.0,
+            value=8.0,
+            step=0.1
+        )
+
+    if "AptitudeTestScore" in X.columns:
+        inputs["AptitudeTestScore"] = st.number_input(
+            "Aptitude Test Score",
+            min_value=0.0,
+            max_value=100.0,
+            value=75.0,
+            step=1.0
+        )
+
+    if "ApptitudeTestScore" in X.columns:
+        inputs["ApptitudeTestScore"] = st.number_input(
+            "Aptitude Test Score",
+            min_value=0.0,
+            max_value=100.0,
+            value=75.0,
+            step=1.0
+        )
+
+    if "SSC_Marks" in X.columns:
+        inputs["SSC_Marks"] = st.number_input(
+            "SSC Marks",
+            min_value=0.0,
+            max_value=100.0,
+            value=75.0,
+            step=1.0
+        )
+
+    if "HSC_Marks" in X.columns:
+        inputs["HSC_Marks"] = st.number_input(
+            "HSC Marks",
+            min_value=0.0,
+            max_value=100.0,
+            value=75.0,
+            step=1.0
+        )
 
 with right:
-    st.subheader("💻 Skills & Experience")
-    num("Internships", ["Internships"], 1, 0, 5, 1)
-    num("Projects", ["Projects"], 2, 0, 10, 1)
-    num("Workshops / Certifications", ["Workshops/Certifications","WorkshopsCertifications"], 1, 0, 10, 1)
-    num("Soft Skill Rating", ["SoftSkillRating","SoftSkillsRating","SoftSkillrating"], 4.3, 0.0, 5.0, 0.1)  
-    yn("Placement Training", ["PlacementTraining"])
-    yn("Extra-curricular Activities", ["ExtracurricularActivities","ExtraCurricularActivities"])
+    st.write("### Skills & Experience")
 
-# StudentID is excluded during training; fill any unexpected remaining feature safely.
-for c in schema["columns"]:
-    if c not in x:
-        x[c] = 0 if c in schema["numeric_features"] else "No"
+    if "Internships" in X.columns:
+        inputs["Internships"] = st.number_input(
+            "Internships",
+            min_value=0,
+            max_value=10,
+            value=1,
+            step=1
+        )
 
-if st.button("🚀 Predict Placement", type="primary", use_container_width=True):
-    row = pd.DataFrame([x], columns=schema["columns"])
-    pred = int(model.predict(row)[0])
-    prob = float(model.predict_proba(row)[0,1])
+    if "Projects" in X.columns:
+        inputs["Projects"] = st.number_input(
+            "Projects",
+            min_value=0,
+            max_value=10,
+            value=2,
+            step=1
+        )
 
-    a,b,c = st.columns(3)
-    a.metric("Prediction", "PLACED" if pred else "NOT PLACED")
-    b.metric("Model Probability", f"{prob*100:.1f}%")
-    c.metric("Readiness", "High" if prob >= .75 else "Moderate" if prob >= .50 else "Needs Improvement")
+    if "Workshops/Certifications" in X.columns:
+        inputs["Workshops/Certifications"] = st.number_input(
+            "Workshops / Certifications",
+            min_value=0,
+            max_value=10,
+            value=1,
+            step=1
+        )
 
-    if pred:
-        st.success("The model predicts the positive placement class.")
+    if "WorkshopsCertifications" in X.columns:
+        inputs["WorkshopsCertifications"] = st.number_input(
+            "Workshops / Certifications",
+            min_value=0,
+            max_value=10,
+            value=1,
+            step=1
+        )
+
+    if "SoftSkillRating" in X.columns:
+        inputs["SoftSkillRating"] = st.number_input(
+            "Soft Skill Rating",
+            min_value=0.0,
+            max_value=5.0,
+            value=4.3,
+            step=0.1
+        )
+
+    if "SoftSkillsRating" in X.columns:
+        inputs["SoftSkillsRating"] = st.number_input(
+            "Soft Skill Rating",
+            min_value=0.0,
+            max_value=5.0,
+            value=4.3,
+            step=0.1
+        )
+
+    if "PlacementTraining" in X.columns:
+        inputs["PlacementTraining"] = st.selectbox(
+            "Placement Training",
+            ["Yes", "No"]
+        )
+
+    if "ExtracurricularActivities" in X.columns:
+        inputs["ExtracurricularActivities"] = st.selectbox(
+            "Extra-curricular Activities",
+            ["Yes", "No"]
+        )
+
+    if "ExtraCurricularActivities" in X.columns:
+        inputs["ExtraCurricularActivities"] = st.selectbox(
+            "Extra-curricular Activities",
+            ["Yes", "No"]
+        )
+
+# Fill remaining dataset columns
+for column in X.columns:
+    if column not in inputs:
+        if column in numeric_features:
+            inputs[column] = 0.0
+        else:
+            inputs[column] = "No"
+
+if st.button(
+    "🚀 Predict Placement",
+    type="primary",
+    use_container_width=True
+):
+
+    row = pd.DataFrame(
+        [inputs],
+        columns=X.columns
+    )
+
+    prediction = int(model.predict(row)[0])
+
+    probability = float(
+        model.predict_proba(row)[0][1]
+    )
+
+    a, b, c = st.columns(3)
+
+    a.metric(
+        "Prediction",
+        "PLACED" if prediction else "NOT PLACED"
+    )
+
+    b.metric(
+        "Probability",
+        f"{probability * 100:.1f}%"
+    )
+
+    readiness = (
+        "High"
+        if probability >= 0.75
+        else "Moderate"
+        if probability >= 0.50
+        else "Needs Improvement"
+    )
+
+    c.metric(
+        "Readiness",
+        readiness
+    )
+
+    if prediction:
+        st.success(
+            "🎉 The model predicts the positive placement class."
+        )
     else:
-        st.warning("The model predicts the negative placement class.")
+        st.warning(
+            "The model predicts the negative placement class."
+        )
 
     st.subheader("🔎 Skill Gap Analyzer")
-    gaps=[]
-    if x.get("CGPA",10) < 7.5: gaps.append("Academic performance: focus on maintaining a stronger CGPA.")
-    apt=x.get("AptitudeTestScore", x.get("ApptitudeTestScore",100))
-    if apt < 65: gaps.append("Aptitude: practice quantitative and logical reasoning.")
-    soft=x.get("SoftSkillRating", x.get("SoftSkillsRating", x.get("SoftSkillrating",5)))
-    if soft < 3.5: gaps.append("Communication: practice speaking, presentations and interviews.")
-    if x.get("Projects",3) < 2: gaps.append("Projects: build at least 2 strong, documented projects.")
-    if x.get("Internships",1) < 1: gaps.append("Experience: seek internship or practical experience.")
+
+    gaps = []
+
+    if inputs.get("CGPA", 10) < 7.5:
+        gaps.append(
+            "Improve academic performance and maintain a stronger CGPA."
+        )
+
+    aptitude = inputs.get(
+        "AptitudeTestScore",
+        inputs.get("ApptitudeTestScore", 100)
+    )
+
+    if aptitude < 65:
+        gaps.append(
+            "Practice quantitative and logical reasoning."
+        )
+
+    soft = inputs.get(
+        "SoftSkillRating",
+        inputs.get("SoftSkillsRating", 5)
+    )
+
+    if soft < 3.5:
+        gaps.append(
+            "Improve communication, presentation and interview skills."
+        )
+
+    if inputs.get("Projects", 3) < 2:
+        gaps.append(
+            "Build at least two strong, documented projects."
+        )
+
+    if inputs.get("Internships", 1) < 1:
+        gaps.append(
+            "Gain practical experience through internships or projects."
+        )
+
     if gaps:
-        for g in gaps: st.write("• "+g)
+        for gap in gaps:
+            st.write("• " + gap)
     else:
-        st.success("No major gaps detected by the project's recommendation rules.")
+        st.success(
+            "✅ No major skill gaps detected by the recommendation rules."
+        )
 
 st.divider()
+
 st.subheader("📊 Model Evaluation")
-if METRICS.exists():
-    m=pd.read_csv(METRICS)
-    st.dataframe(m.style.format({"accuracy":"{:.2%}","precision":"{:.2%}","recall":"{:.2%}","f1":"{:.2%}"}), use_container_width=True, hide_index=True)
+
+st.metric(
+    "Test Accuracy",
+    f"{accuracy * 100:.2f}%"
+)
+
+st.caption(
+    "This is an educational machine-learning project. "
+    "The prediction is not a guarantee of placement."
+)
